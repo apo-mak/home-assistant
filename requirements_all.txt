@@ -37,7 +37,7 @@ PyRMVtransport==0.3.3
 PySocks==1.7.1
 
 # homeassistant.components.switchbot
-PySwitchbot==0.20.0
+PySwitchbot==0.20.2
 
 # homeassistant.components.transport_nsw
 PyTransportNSW==0.1.1
@@ -315,7 +315,7 @@ ambiclimate==0.2.1
 amcrest==1.9.7
 
 # homeassistant.components.androidtv
-androidtv[async]==0.0.67
+androidtv[async]==0.0.69
 
 # homeassistant.components.anel_pwrctrl
 anel_pwrctrl-homeassistant==0.0.1.dev2
