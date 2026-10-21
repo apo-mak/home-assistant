@@ -1448,6 +1448,59 @@ async def test_device_system_stats(
 
 
 @pytest.mark.parametrize(
+    "device_payload",
+    [
+        [
+            {
+                "device_id": "mock-id",
+                "mac": "00:00:00:00:01:01",
+                "model": "UDMPRO",
+                "name": "Device",
+                "state": 1,
+                "type": "udm",
+                "version": "4.0.42.10433",
+                "speedtest-status": {
+                    "latency": 12,
+                    "rundate": 1700000000,
+                    "runtime": 20,
+                    "status_download": 2,
+                    "status_ping": 2,
+                    "status_summary": 2,
+                    "status_upload": 2,
+                    "xput_download": 512.3,
+                    "xput_upload": 98.7,
+                },
+            }
+        ]
+    ],
+)
+@pytest.mark.usefixtures("config_entry_setup")
+async def test_device_speedtest(
+    hass: HomeAssistant,
+    mock_websocket_message: WebsocketMessageMock,
+    device_payload: list[dict[str, Any]],
+) -> None:
+    """Verify that speedtest sensors are working as expected."""
+    assert hass.states.get("sensor.device_speedtest_download").state == "512.3"
+    assert hass.states.get("sensor.device_speedtest_upload").state == "98.7"
+    assert hass.states.get("sensor.device_speedtest_ping").state == "12"
+
+    # Verify new event change speedtest-status
+    device = device_payload[0]
+    device["speedtest-status"] = {
+        **device["speedtest-status"],
+        "latency": 9,
+        "xput_download": 940.1,
+        "xput_upload": 101.2,
+    }
+    mock_websocket_message(message=MessageKey.DEVICE, data=device)
+
+    assert hass.states.get("sensor.device_speedtest_download").state == "940.1"
+    assert hass.states.get("sensor.device_speedtest_upload").state == "101.2"
+    assert hass.states.get("sensor.device_speedtest_ping").state == "9"
+
+
+@pytest.mark.parametrize(
     "config_entry_options",
     [
         {
