@@ -225,17 +225,31 @@ def async_device_battery_pool_value_fn(
 
 
 @callback
-def async_device_speedtest_supported_fn(hub: UnifiHub, obj_id: str) -> bool:
-    """Determine if a device reports speedtest results."""
-    return hub.api.devices[obj_id].speedtest_status is not None
+def async_device_speedtest_supported_fn(key: str, hub: UnifiHub, obj_id: str) -> bool:
+    """Discover speedtest support and retain discovered sensors."""
+    return (key, obj_id) in hub.entity_loader.known_objects or (
+        hub.api.devices[obj_id].speedtest_status is not None
+    )
 
 
 @callback
 def async_device_speedtest_value_fn(
     field: str, hub: UnifiHub, device: Device
 ) -> float | None:
-    """Retrieve a speedtest status field."""
-    return cast(dict[str, float | None], device.speedtest_status or {}).get(field)
+    """Retrieve a field of the last completed speedtest."""
+    status = device.speedtest_status
+    # While a test runs, UniFi empties the status or reports rundate 0 with partial values.
+    if not status or not status.get("rundate"):
+        return None
+    return cast(dict[str, float | None], status).get(field)
+
+
+@callback
+def async_speedtest_value_changed_fn(
+    old: StateType | date | datetime | Decimal, new: datetime | float | str | None
+) -> bool:
+    """Keep the last completed result while a new speedtest runs."""
+    return new is not None and new != old
 
 
 @callback
@@ -904,9 +918,10 @@ ENTITY_DESCRIPTIONS: tuple[UnifiSensorEntityDescription, ...] = (
         available_fn=async_device_available_fn,
         device_info_fn=async_device_device_info_fn,
         object_fn=lambda api, obj_id: api.devices[obj_id],
-        supported_fn=async_device_speedtest_supported_fn,
+        supported_fn=partial(async_device_speedtest_supported_fn, "Speedtest download"),
         unique_id_fn=lambda hub, obj_id: f"speedtest_download-{obj_id}",
         value_fn=partial(async_device_speedtest_value_fn, "xput_download"),
+        value_changed_fn=async_speedtest_value_changed_fn,
     ),
     UnifiSensorEntityDescription[Devices, Device](
         key="Speedtest upload",
@@ -918,9 +933,10 @@ ENTITY_DESCRIPTIONS: tuple[UnifiSensorEntityDescription, ...] = (
         available_fn=async_device_available_fn,
         device_info_fn=async_device_device_info_fn,
         object_fn=lambda api, obj_id: api.devices[obj_id],
-        supported_fn=async_device_speedtest_supported_fn,
+        supported_fn=partial(async_device_speedtest_supported_fn, "Speedtest upload"),
         unique_id_fn=lambda hub, obj_id: f"speedtest_upload-{obj_id}",
         value_fn=partial(async_device_speedtest_value_fn, "xput_upload"),
+        value_changed_fn=async_speedtest_value_changed_fn,
     ),
     UnifiSensorEntityDescription[Devices, Device](
         key="Speedtest ping",
@@ -932,9 +948,10 @@ ENTITY_DESCRIPTIONS: tuple[UnifiSensorEntityDescription, ...] = (
         available_fn=async_device_available_fn,
         device_info_fn=async_device_device_info_fn,
         object_fn=lambda api, obj_id: api.devices[obj_id],
-        supported_fn=async_device_speedtest_supported_fn,
+        supported_fn=partial(async_device_speedtest_supported_fn, "Speedtest ping"),
         unique_id_fn=lambda hub, obj_id: f"speedtest_ping-{obj_id}",
         value_fn=partial(async_device_speedtest_value_fn, "latency"),
+        value_changed_fn=async_speedtest_value_changed_fn,
     ),
 )
 

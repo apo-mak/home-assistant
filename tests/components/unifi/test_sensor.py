@@ -468,6 +468,63 @@ UPS_BATTERY_POOL_FIELDS = [
     if field in device["vbms_table"]["battpool"]
 ]
 
+SPEEDTEST_RESULT = {
+    "latency": 3,
+    "rundate": 1793934268,
+    "runtime": 26,
+    "status_download": 2,
+    "status_ping": 2,
+    "status_summary": 2,
+    "status_upload": 2,
+    "xput_download": 946.0,
+    "xput_upload": 492.0,
+}
+
+SPEEDTEST_DEVICE = {
+    "device_id": "mock-id",
+    "mac": "00:00:00:00:01:01",
+    "model": "UDMPROSE",
+    "name": "Device",
+    "state": 1,
+    "type": "udm",
+    "version": "4.0.42.10433",
+    "speedtest-status": SPEEDTEST_RESULT,
+}
+
+SPEEDTEST_DEVICE_WITHOUT_STATUS = {
+    key: value for key, value in SPEEDTEST_DEVICE.items() if key != "speedtest-status"
+}
+
+SPEEDTEST_DEVICE_NEW_RESULT = {
+    **SPEEDTEST_DEVICE,
+    "speedtest-status": {
+        **SPEEDTEST_RESULT,
+        "latency": 2,
+        "rundate": 1793984149,
+        "xput_download": 1014.0,
+        "xput_upload": 531.0,
+    },
+}
+
+# Reported by a UDM-SE while a speedtest runs.
+SPEEDTEST_STARTED = {
+    **SPEEDTEST_RESULT,
+    "latency": 2,
+    "rundate": 0,
+    "runtime": 0,
+    "status_download": 1,
+    "status_summary": 1,
+    "status_upload": 0,
+    "xput_download": 0.0,
+    "xput_upload": 0.0,
+}
+SPEEDTEST_PARTIAL = {
+    **SPEEDTEST_STARTED,
+    "status_download": 2,
+    "status_upload": 1,
+    "xput_download": 1014.0,
+}
+
 
 @pytest.mark.parametrize(
     "config_entry_options",
@@ -514,6 +571,7 @@ UPS_BATTERY_POOL_FIELDS = [
                 "model": "US16P150",
                 "name": "mock-name",
                 "port_overrides": [],
+                "speedtest-status": SPEEDTEST_RESULT,
                 "uptime_stats": {
                     "WAN": {
                         "availability": 100.0,
@@ -1447,57 +1505,106 @@ async def test_device_system_stats(
     assert hass.states.get("sensor.device_memory_utilization").state == "33.3"
 
 
-@pytest.mark.parametrize(
-    "device_payload",
-    [
-        [
-            {
-                "device_id": "mock-id",
-                "mac": "00:00:00:00:01:01",
-                "model": "UDMPRO",
-                "name": "Device",
-                "state": 1,
-                "type": "udm",
-                "version": "4.0.42.10433",
-                "speedtest-status": {
-                    "latency": 12,
-                    "rundate": 1700000000,
-                    "runtime": 20,
-                    "status_download": 2,
-                    "status_ping": 2,
-                    "status_summary": 2,
-                    "status_upload": 2,
-                    "xput_download": 512.3,
-                    "xput_upload": 98.7,
-                },
-            }
-        ]
-    ],
-)
+def _speedtest_states(hass: HomeAssistant) -> tuple[str, str, str]:
+    """Return the download, upload and ping states."""
+    return (
+        hass.states.get("sensor.device_speedtest_download").state,
+        hass.states.get("sensor.device_speedtest_upload").state,
+        hass.states.get("sensor.device_speedtest_ping").state,
+    )
+
+
+@pytest.mark.parametrize("device_payload", [[SPEEDTEST_DEVICE]])
 @pytest.mark.usefixtures("config_entry_setup")
 async def test_device_speedtest(
     hass: HomeAssistant,
     mock_websocket_message: WebsocketMessageMock,
-    device_payload: list[dict[str, Any]],
 ) -> None:
-    """Verify that speedtest sensors are working as expected."""
-    assert hass.states.get("sensor.device_speedtest_download").state == "512.3"
-    assert hass.states.get("sensor.device_speedtest_upload").state == "98.7"
-    assert hass.states.get("sensor.device_speedtest_ping").state == "12"
+    """Verify that speedtest sensors follow completed results and availability."""
+    assert _speedtest_states(hass) == ("946.0", "492.0", "3")
 
-    # Verify new event change speedtest-status
-    device = device_payload[0]
-    device["speedtest-status"] = {
-        **device["speedtest-status"],
-        "latency": 9,
-        "xput_download": 940.1,
-        "xput_upload": 101.2,
-    }
-    mock_websocket_message(message=MessageKey.DEVICE, data=device)
+    mock_websocket_message(
+        message=MessageKey.DEVICE,
+        data=SPEEDTEST_DEVICE_NEW_RESULT,
+    )
+    assert _speedtest_states(hass) == ("1014.0", "531.0", "2")
 
-    assert hass.states.get("sensor.device_speedtest_download").state == "940.1"
-    assert hass.states.get("sensor.device_speedtest_upload").state == "101.2"
-    assert hass.states.get("sensor.device_speedtest_ping").state == "9"
+    mock_websocket_message(
+        message=MessageKey.DEVICE, data={**SPEEDTEST_DEVICE, "disabled": True}
+    )
+    assert _speedtest_states(hass) == (STATE_UNAVAILABLE,) * 3
+
+
+@pytest.mark.parametrize("device_payload", [[SPEEDTEST_DEVICE]])
+@pytest.mark.parametrize(
+    "running_device",
+    [
+        pytest.param(SPEEDTEST_DEVICE_WITHOUT_STATUS, id="missing"),
+        pytest.param(
+            {**SPEEDTEST_DEVICE, "speedtest-status": None},
+            id="null",
+        ),
+        pytest.param({**SPEEDTEST_DEVICE, "speedtest-status": {}}, id="empty"),
+        pytest.param(
+            {**SPEEDTEST_DEVICE, "speedtest-status": SPEEDTEST_STARTED},
+            id="started",
+        ),
+        pytest.param(
+            {**SPEEDTEST_DEVICE, "speedtest-status": SPEEDTEST_PARTIAL},
+            id="partial",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("config_entry_setup")
+async def test_device_speedtest_keeps_result_during_run(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    mock_websocket_message: WebsocketMessageMock,
+    running_device: dict[str, Any],
+) -> None:
+    """Verify a running speedtest keeps the entities and last completed result."""
+    mock_websocket_message(message=MessageKey.DEVICE, data=running_device)
+    await hass.async_block_till_done()
+
+    assert _speedtest_states(hass) == ("946.0", "492.0", "3")
+    assert entity_registry.async_get("sensor.device_speedtest_download") is not None
+
+    mock_websocket_message(
+        message=MessageKey.DEVICE,
+        data=SPEEDTEST_DEVICE_NEW_RESULT,
+    )
+    assert _speedtest_states(hass) == ("1014.0", "531.0", "2")
+
+
+@pytest.mark.parametrize(
+    "device_payload",
+    [[{**SPEEDTEST_DEVICE, "speedtest-status": SPEEDTEST_STARTED}]],
+)
+@pytest.mark.usefixtures("config_entry_setup")
+async def test_device_speedtest_no_completed_result(
+    hass: HomeAssistant,
+    mock_websocket_message: WebsocketMessageMock,
+) -> None:
+    """Verify sensors are unknown until a speedtest completes."""
+    assert _speedtest_states(hass) == (STATE_UNKNOWN,) * 3
+
+    mock_websocket_message(message=MessageKey.DEVICE, data=SPEEDTEST_DEVICE)
+    assert _speedtest_states(hass) == ("946.0", "492.0", "3")
+
+
+@pytest.mark.parametrize(
+    "device_payload",
+    [
+        pytest.param([SPEEDTEST_DEVICE_WITHOUT_STATUS], id="missing"),
+        pytest.param([{**SPEEDTEST_DEVICE, "speedtest-status": {}}], id="empty"),
+    ],
+)
+@pytest.mark.usefixtures("config_entry_setup")
+async def test_device_speedtest_not_supported(hass: HomeAssistant) -> None:
+    """Verify a device without speedtest data gets no speedtest sensors."""
+    assert hass.states.get("sensor.device_speedtest_download") is None
+    assert hass.states.get("sensor.device_speedtest_upload") is None
+    assert hass.states.get("sensor.device_speedtest_ping") is None
 
 
 @pytest.mark.parametrize(
